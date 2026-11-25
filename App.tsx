@@ -377,7 +377,12 @@ export default function App() {
           )}
 
           {result && isItemsResult(result) && result.platform !== "instagram" && (
-            <ItemsPanel result={result} />
+            <ItemsPanel
+              result={result}
+              preparingKey={preparingKey}
+              prepared={prepared}
+              onAudio={handleInstagramAudio}
+            />
           )}
 
           {result && !isItemsResult(result) && (
@@ -650,9 +655,21 @@ function InstagramPanel({
   );
 }
 
-function ItemsPanel({ result }: { result: ItemsResult }) {
+function ItemsPanel({
+  result,
+  preparingKey,
+  prepared,
+  onAudio,
+}: {
+  result: ItemsResult;
+  preparingKey: string | null;
+  prepared: Record<string, PrepareResult>;
+  onAudio: (itemId: number, sourceToken: string, quality: string, title: string) => void;
+}) {
   const platformLabel =
     result.platform === "facebook" ? "Facebook" : "Instagram";
+  const videos = result.items.filter((i) => i.kind === "video");
+  const audioTitle = result.caption || result.title || platformLabel;
   return (
     <div className="panel result">
       <div className="result-label">{platformLabel} — resultado da pesquisa</div>
@@ -707,6 +724,44 @@ function ItemsPanel({ result }: { result: ItemsResult }) {
               </li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {platformLabel === "Facebook" && videos.length > 0 && (
+        <div className="files-wrap">
+          <div className="files-title">Áudio MP3 do vídeo</div>
+          <div className="format-grid">
+            {FALLBACK_AUDIO_OPTIONS.map((o) => {
+              const item = videos[0];
+              const key = `fb-${item.id}-${o.quality}`;
+              const busy = preparingKey === key;
+              const done = prepared[key];
+              return done ? (
+                <a
+                  key={key}
+                  className="format-btn format-btn--done"
+                  href={done.href}
+                  download={done.filename}
+                >
+                  <span className="format-label">{o.label}</span>
+                  <span className="format-action">Clique para baixar</span>
+                </a>
+              ) : (
+                <button
+                  key={key}
+                  type="button"
+                  className="format-btn"
+                  disabled={Boolean(preparingKey)}
+                  onClick={() =>
+                    onAudio(item.id, tokenFromHref(item.href), o.quality, audioTitle)
+                  }
+                >
+                  <span className="format-label">{o.label}</span>
+                  <span className="format-action">{busy ? "Extraindo…" : "Baixar"}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
 
