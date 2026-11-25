@@ -622,6 +622,11 @@ function InstagramPanel({
           ) : (
             <div className="thumb thumb-empty">Prévia</div>
           )}
+          {result.thumb ? (
+            <a className="btn btn-ghost btn-sm thumb-download" href={result.thumb} download="preview.jpg">
+              Baixar miniatura
+            </a>
+          ) : null}
         </div>
 
         <div className="result-body">
