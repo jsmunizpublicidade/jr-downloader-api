@@ -733,7 +733,7 @@ function ItemsPanel({
           <div className="format-grid">
             {FALLBACK_AUDIO_OPTIONS.map((o) => {
               const item = videos[0];
-              const key = `fb-${item.id}-${o.quality}`;
+              const key = `ig-${item.id}-${o.quality}`;
               const busy = preparingKey === key;
               const done = prepared[key];
               return done ? (
