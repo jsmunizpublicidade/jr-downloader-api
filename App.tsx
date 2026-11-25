@@ -126,7 +126,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ConvertResult | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [preparingKey, setPreparingKey] = useState<string | null>(null);
+  const [preparingKeys, setPreparingKeys] = useState<Set<string>>(() => new Set());
   const [prepared, setPrepared] = useState<Record<string, PrepareResult>>({});
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -141,6 +141,18 @@ export default function App() {
     return () => clearInterval(id);
   }, [loading]);
 
+  function markPreparing(key: string) {
+    setPreparingKeys((prev) => new Set(prev).add(key));
+  }
+
+  function clearPreparing(key: string) {
+    setPreparingKeys((prev) => {
+      const next = new Set(prev);
+      next.delete(key);
+      return next;
+    });
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     if (!url.trim() || loading) return;
@@ -148,7 +160,7 @@ export default function App() {
     setNotice(null);
     setResult(null);
     setPrepared({});
-    setPreparingKey(null);
+    setPreparingKeys(new Set());
     setLoading(true);
     try {
       const source = tab === "facebook" ? pageSource : undefined;
@@ -181,25 +193,27 @@ export default function App() {
     setError(null);
     setNotice(null);
     setPrepared({});
+    setPreparingKeys(new Set());
   }
 
   async function handlePrepare(type: "mp3" | "mp4", quality: string) {
-    if (!result || isItemsResult(result) || preparingKey) return;
+    if (!result || isItemsResult(result)) return;
     const key = `${type}-${quality}`;
     if (prepared[key]) {
       triggerDownload(prepared[key]);
       return;
     }
+    if (preparingKeys.has(key)) return;
     setError(null);
-    setPreparingKey(key);
+    markPreparing(key);
     try {
-      const out = await prepare(url.trim() || result.source, type, quality);
+      const out = await prepare(result.source || url.trim(), type, quality);
       setPrepared((prev) => ({ ...prev, [key]: out }));
       triggerDownload(out);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao preparar o arquivo.");
     } finally {
-      setPreparingKey(null);
+      clearPreparing(key);
     }
   }
 
@@ -209,22 +223,25 @@ export default function App() {
     quality: string,
     title: string,
   ) {
-    if (preparingKey) return;
     const key = `ig-${itemId}-${quality}`;
     if (prepared[key]) {
       triggerDownload(prepared[key]);
       return;
     }
+    if (preparingKeys.has(key)) return;
     setError(null);
-    setPreparingKey(key);
+    markPreparing(key);
     try {
-      const out = await prepare(url.trim(), "mp3", quality, { sourceToken, title });
+      const out = await prepare(result?.source || url.trim(), "mp3", quality, {
+        sourceToken,
+        title,
+      });
       setPrepared((prev) => ({ ...prev, [key]: out }));
       triggerDownload(out);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao extrair o áudio.");
     } finally {
-      setPreparingKey(null);
+      clearPreparing(key);
     }
   }
 
@@ -310,6 +327,7 @@ export default function App() {
                     setError(null);
                     setNotice(null);
                     setPrepared({});
+                    setPreparingKeys(new Set());
                     inputRef.current?.focus();
                   }}
                 >
@@ -370,7 +388,7 @@ export default function App() {
               key={`${result.source}-${igChoice}`}
               result={result as InstagramResult}
               choice={igChoice}
-              preparingKey={preparingKey}
+              preparingKeys={preparingKeys}
               prepared={prepared}
               onAudio={handleInstagramAudio}
             />
@@ -379,7 +397,7 @@ export default function App() {
           {result && isItemsResult(result) && result.platform !== "instagram" && (
             <ItemsPanel
               result={result}
-              preparingKey={preparingKey}
+              preparingKeys={preparingKeys}
               prepared={prepared}
               onAudio={handleInstagramAudio}
             />
@@ -388,7 +406,7 @@ export default function App() {
           {result && !isItemsResult(result) && (
             <OptionsPanel
               result={result}
-              preparingKey={preparingKey}
+              preparingKeys={preparingKeys}
               prepared={prepared}
               onPrepare={handlePrepare}
             />
@@ -465,25 +483,133 @@ export default function App() {
 function InstagramPanel({
   result,
   choice,
-  preparingKey,
+  preparingKeys,
   prepared,
   onAudio,
 }: {
   result: InstagramResult;
   choice: InstagramChoice;
-  preparingKey: string | null;
+  preparingKeys: Set<string>;
   prepared: Record<string, PrepareResult>;
   onAudio: (itemId: number, sourceToken: string, quality: string, title: string) => void;
 }) {
-  type Section = "video" | "image" | "audio";
+  type Section = "all" | "video" | "image" | "audio";
   const videos = result.items.filter((i) => i.kind === "video");
   const images = result.items.filter((i) => i.kind === "image");
-  const initial: Section = choice === "mp3" ? "audio" : choice === "image" ? "image" : "video";
+  const initial: Section =
+    choice === "mp3" ? "audio" : choice === "image" ? "image" : "all";
   const [section, setSection] = useState<Section>(initial);
 
   const audioOptions = (result.options ?? []).filter((o) => o.type === "mp3");
   const qualities = audioOptions.length > 0 ? audioOptions : FALLBACK_AUDIO_OPTIONS;
   const audioTitle = result.caption || result.title || result.username || "instagram";
+
+  const tabs: { id: Section; label: string; count: number }[] = [
+    { id: "all", label: "Tudo", count: videos.length + images.length },
+    { id: "video", label: "Vídeo (Reels/Story)", count: videos.length },
+    { id: "image", label: "Imagem", count: images.length },
+    { id: "audio", label: "Áudio MP3", count: videos.length ? qualities.length : 0 },
+  ];
+
+  const videoBlock = (
+    <div className="ig-files">
+      {section === "all" && <h3 className="files-title">Vídeos, Reels e Stories</h3>}
+      {videos.length === 0 ? (
+        <p className="ig-empty">
+          Este link não tem vídeo. Use uma foto para baixar imagem ou um Reel/vídeo para extrair áudio.
+        </p>
+      ) : (
+        <ul className="files">
+          {videos.map((item, i) => (
+            <li key={item.id}>
+              <span className="file-kind">MP4</span>
+              <span className="file-name" title={item.filename}>
+                Vídeo {i + 1}
+              </span>
+              <a className="btn btn-primary btn-sm" href={item.href} download={item.filename}>
+                Baixar
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  const imageBlock = (
+    <div className="ig-files">
+      {section === "all" && <h3 className="files-title">Fotos e carrossel</h3>}
+      {images.length === 0 ? (
+        <p className="ig-empty">
+          Este link não tem imagem. Abra a aba de vídeo ou áudio para ver o que está disponível.
+        </p>
+      ) : (
+        <ul className="files">
+          {images.map((item, i) => (
+            <li key={item.id}>
+              <span className="file-kind">{item.ext.toUpperCase()}</span>
+              <span className="file-name" title={item.filename}>
+                Foto {i + 1}
+              </span>
+              <a className="btn btn-primary btn-sm" href={item.href} download={item.filename}>
+                Baixar
+              </a>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+
+  const audioBlock = (
+    <div className="ig-files">
+      {section === "all" && <h3 className="files-title">Áudio MP3</h3>}
+      {videos.length === 0 ? (
+        <p className="ig-empty">
+          Não há vídeo neste link para extrair áudio. Cole um Reel ou vídeo do Instagram.
+        </p>
+      ) : (
+        videos.map((item, i) => (
+          <div className="ig-audio-block" key={item.id}>
+            <div className="ig-audio-title">
+              Áudio do vídeo {i + 1} <span className="muted small">· MP3</span>
+            </div>
+            <div className="format-grid">
+              {qualities.map((o) => {
+                const key = `ig-${item.id}-${o.quality}`;
+                const busy = preparingKeys.has(key);
+                const done = prepared[key];
+                return done ? (
+                  <a
+                    key={key}
+                    className="format-btn format-btn--done"
+                    href={done.href}
+                    download={done.filename}
+                  >
+                    <span className="format-label">{o.label}</span>
+                    <span className="format-action">Clique para baixar</span>
+                  </a>
+                ) : (
+                  <button
+                    key={key}
+                    type="button"
+                    className="format-btn"
+                    disabled={busy}
+                    onClick={() =>
+                      onAudio(item.id, tokenFromHref(item.href), o.quality, audioTitle)
+                    }
+                  >
+                    <span className="format-label">{o.label}</span>
+                    <span className="format-action">{busy ? "Extraindo…" : "Baixar"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))
+      )}
+    </div>
+  );
 
   return (
     <div className="panel result">
@@ -515,133 +641,25 @@ function InstagramPanel({
       </div>
 
       <div className="ig-tabs" role="tablist" aria-label="Tipo de arquivo">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={section === "video"}
-          className={`ig-tab ${section === "video" ? "ig-tab--active" : ""}`}
-          onClick={() => setSection("video")}
-        >
-          Vídeo (Reels/Story) <span className="ig-count">{videos.length}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={section === "image"}
-          className={`ig-tab ${section === "image" ? "ig-tab--active" : ""}`}
-          onClick={() => setSection("image")}
-        >
-          Imagem <span className="ig-count">{images.length}</span>
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={section === "audio"}
-          className={`ig-tab ${section === "audio" ? "ig-tab--active" : ""}`}
-          onClick={() => setSection("audio")}
-        >
-          Áudio MP3 <span className="ig-count">{videos.length ? qualities.length : 0}</span>
-        </button>
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            role="tab"
+            aria-selected={section === t.id}
+            className={`ig-tab ${section === t.id ? "ig-tab--active" : ""}`}
+            onClick={() => setSection(t.id)}
+          >
+            {t.label} <span className="ig-count">{t.count}</span>
+          </button>
+        ))}
       </div>
 
-      {section === "video" && (
-        <div className="ig-files">
-          {videos.length === 0 ? (
-            <p className="ig-empty">
-              Este link não tem vídeo. Use uma foto para baixar imagem ou um Reel/vídeo para extrair áudio.
-            </p>
-          ) : (
-            <ul className="files">
-              {videos.map((item, i) => (
-                <li key={item.id}>
-                  <span className="file-kind">MP4</span>
-                  <span className="file-name" title={item.filename}>
-                    Vídeo {i + 1}
-                  </span>
-                  <a className="btn btn-primary btn-sm" href={item.href} download={item.filename}>
-                    Baixar
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
+      {(section === "all" || section === "video") && videoBlock}
+      {(section === "all" || section === "image") && imageBlock}
+      {(section === "all" || section === "audio") && audioBlock}
 
-      {section === "image" && (
-        <div className="ig-files">
-          {images.length === 0 ? (
-            <p className="ig-empty">
-              Este link não tem imagem. Abra a aba de vídeo ou áudio para ver o que está disponível.
-            </p>
-          ) : (
-            <ul className="files">
-              {images.map((item, i) => (
-                <li key={item.id}>
-                  <span className="file-kind">{item.ext.toUpperCase()}</span>
-                  <span className="file-name" title={item.filename}>
-                    Foto {i + 1}
-                  </span>
-                  <a className="btn btn-primary btn-sm" href={item.href} download={item.filename}>
-                    Baixar
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-      )}
-
-      {section === "audio" && (
-        <div className="ig-files">
-          {videos.length === 0 ? (
-            <p className="ig-empty">
-              Não há vídeo neste link para extrair áudio. Cole um Reel ou vídeo do Instagram.
-            </p>
-          ) : (
-            videos.map((item, i) => (
-              <div className="ig-audio-block" key={item.id}>
-                <div className="ig-audio-title">
-                  Áudio do vídeo {i + 1} <span className="muted small">· MP3</span>
-                </div>
-                <div className="format-grid">
-                  {qualities.map((o) => {
-                    const key = `ig-${item.id}-${o.quality}`;
-                    const busy = preparingKey === key;
-                    const done = prepared[key];
-                    return done ? (
-                      <a
-                        key={key}
-                        className="format-btn format-btn--done"
-                        href={done.href}
-                        download={done.filename}
-                      >
-                        <span className="format-label">{o.label}</span>
-                        <span className="format-action">Clique para baixar</span>
-                      </a>
-                    ) : (
-                      <button
-                        key={key}
-                        type="button"
-                        className="format-btn"
-                        disabled={Boolean(preparingKey)}
-                        onClick={() =>
-                          onAudio(item.id, tokenFromHref(item.href), o.quality, audioTitle)
-                        }
-                      >
-                        <span className="format-label">{o.label}</span>
-                        <span className="format-action">{busy ? "Extraindo…" : "Baixar"}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            ))
-          )}
-        </div>
-      )}
-
-      {preparingKey && (
+      {preparingKeys.size > 0 && (
         <div className="panel panel-loading panel-inline" role="status">
           <span className="spinner" aria-hidden="true" />
           <span>Extraindo o áudio… isso pode levar alguns instantes.</span>
@@ -657,12 +675,12 @@ function InstagramPanel({
 
 function ItemsPanel({
   result,
-  preparingKey,
+  preparingKeys,
   prepared,
   onAudio,
 }: {
   result: ItemsResult;
-  preparingKey: string | null;
+  preparingKeys: Set<string>;
   prepared: Record<string, PrepareResult>;
   onAudio: (itemId: number, sourceToken: string, quality: string, title: string) => void;
 }) {
@@ -734,7 +752,7 @@ function ItemsPanel({
             {FALLBACK_AUDIO_OPTIONS.map((o) => {
               const item = videos[0];
               const key = `ig-${item.id}-${o.quality}`;
-              const busy = preparingKey === key;
+              const busy = preparingKeys.has(key);
               const done = prepared[key];
               return done ? (
                 <a
@@ -751,7 +769,7 @@ function ItemsPanel({
                   key={key}
                   type="button"
                   className="format-btn"
-                  disabled={Boolean(preparingKey)}
+                  disabled={busy}
                   onClick={() =>
                     onAudio(item.id, tokenFromHref(item.href), o.quality, audioTitle)
                   }
@@ -772,12 +790,12 @@ function ItemsPanel({
 
 function OptionsPanel({
   result,
-  preparingKey,
+  preparingKeys,
   prepared,
   onPrepare,
 }: {
   result: MediaOptionsResult;
-  preparingKey: string | null;
+  preparingKeys: Set<string>;
   prepared: Record<string, PrepareResult>;
   onPrepare: (type: "mp3" | "mp4", quality: string) => void;
 }) {
@@ -817,7 +835,7 @@ function OptionsPanel({
           <div className="format-grid">
             {mp3.map((o) => {
               const key = `${o.type}-${o.quality}`;
-              const busy = preparingKey === key;
+              const busy = preparingKeys.has(key);
               const done = prepared[key];
               return done ? (
                 <a
@@ -834,7 +852,7 @@ function OptionsPanel({
                   key={key}
                   type="button"
                   className="format-btn"
-                  disabled={Boolean(preparingKey)}
+                  disabled={busy}
                   onClick={() => onPrepare("mp3", o.quality)}
                 >
                   <span className="format-label">{o.label}</span>
@@ -850,7 +868,7 @@ function OptionsPanel({
           <div className="format-grid">
             {mp4.map((o) => {
               const key = `${o.type}-${o.quality}`;
-              const busy = preparingKey === key;
+              const busy = preparingKeys.has(key);
               const done = prepared[key];
               return done ? (
                 <a
@@ -867,7 +885,7 @@ function OptionsPanel({
                   key={key}
                   type="button"
                   className="format-btn"
-                  disabled={Boolean(preparingKey)}
+                  disabled={busy}
                   onClick={() => onPrepare("mp4", o.quality)}
                 >
                   <span className="format-label">{o.label}</span>
@@ -879,7 +897,7 @@ function OptionsPanel({
         </section>
       </div>
 
-      {preparingKey && (
+      {preparingKeys.size > 0 && (
         <div className="panel panel-loading panel-inline" role="status">
           <span className="spinner" aria-hidden="true" />
           <span>Preparando o arquivo… isso pode levar alguns instantes.</span>
